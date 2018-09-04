@@ -275,8 +275,8 @@ std::vector<std::vector<Word>> getWords(int lineOffset, int lineCount, int view,
 }
 
 
-// Scan for single matching block in other file
-void findMatch(const CompareInfo& cmpInfo,
+// Scan for the best single matching block in the other file
+void findBestMatch(const CompareInfo& cmpInfo,
 		const std::vector<uint64_t>& lineHashes1, const std::vector<uint64_t>& lineHashes2,
 		const diffInfo& lookupDiff, int lookupOff, MatchInfo& mi)
 {
@@ -360,9 +360,38 @@ void findMatch(const CompareInfo& cmpInfo,
 	}
 
 	if (matchCount != 1)
-		mi.matchDiff	= nullptr;
+		mi.matchDiff = nullptr;
+}
 
-	return;
+
+// Recursively resolve the best match
+bool resolveMatch(const CompareInfo& cmpInfo,
+		const std::vector<uint64_t>& lineHashes1, const std::vector<uint64_t>& lineHashes2,
+		diffInfo& lookupDiff, int lookupOff, MatchInfo& mi)
+{
+	bool ret = false;
+
+	if (mi.matchDiff)
+	{
+		lookupOff = mi.matchOff + (lookupOff - mi.lookupOff);
+
+		MatchInfo reverseMi;
+		findBestMatch(cmpInfo, lineHashes1, lineHashes2, *(mi.matchDiff), lookupOff, reverseMi);
+
+		if (reverseMi.matchDiff == &lookupDiff)
+		{
+			lookupDiff.info.moves.emplace_back(mi.lookupOff, mi.matchLen);
+			mi.matchDiff->info.moves.emplace_back(mi.matchOff, mi.matchLen);
+			ret = true;
+		}
+		else if (reverseMi.matchDiff)
+		{
+			ret = resolveMatch(cmpInfo, lineHashes1, lineHashes2, *(mi.matchDiff), lookupOff, reverseMi);
+			mi.matchLen = 0;
+		}
+	}
+
+	return ret;
 }
 
 
@@ -397,28 +426,14 @@ void findMoves(CompareInfo& cmpInfo,
 				}
 
 				MatchInfo mi;
-				findMatch(cmpInfo, lineHashes1, lineHashes2, lookupDiff, lookupEi, mi);
+				findBestMatch(cmpInfo, lineHashes1, lineHashes2, lookupDiff, lookupEi, mi);
 
-				if (mi.matchDiff)
+				if (resolveMatch(cmpInfo, lineHashes1, lineHashes2, lookupDiff, lookupEi, mi))
 				{
-					MatchInfo reverseMi;
-					findMatch(cmpInfo, lineHashes1, lineHashes2, *(mi.matchDiff),
-							mi.matchOff + (lookupEi - mi.lookupOff), reverseMi);
+					repeat = true;
 
-					if (reverseMi.matchDiff == &lookupDiff)
-					{
-						lookupDiff.info.moves.emplace_back(mi.lookupOff, mi.matchLen);
-						mi.matchDiff->info.moves.emplace_back(mi.matchOff, mi.matchLen);
-						repeat = true;
-					}
-					else if (reverseMi.matchDiff)
-					{
-						mi.matchDiff->info.moves.emplace_back(reverseMi.lookupOff, reverseMi.matchLen);
-						reverseMi.matchDiff->info.moves.emplace_back(reverseMi.matchOff, reverseMi.matchLen);
-						mi.matchLen = 0;
+					if (mi.matchLen == 0)
 						--lookupEi;
-						repeat = true;
-					}
 				}
 
 				if (mi.matchLen)
